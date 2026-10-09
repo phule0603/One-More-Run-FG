@@ -3,6 +3,10 @@
 /* compact layout for short screens (landscape phones) */
 @custom-variant short (@media (max-height: 520px));
 
+@theme inline {
+  --font-display: var(--font-chakra), ui-sans-serif, system-ui, sans-serif;
+}
+
 @theme {
   --color-neon-cyan: #22d3ee;
   --color-neon-pink: #f472b6;

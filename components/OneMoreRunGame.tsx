@@ -83,7 +83,7 @@ export default function OneMoreRunGame() {
 
   return (
     <div className="relative h-full w-full touch-none select-none font-mono">
-      <canvas ref={canvasRef} className="block h-full w-full" aria-label="One More Run game canvas" />
+      <canvas ref={canvasRef} className="block h-full w-full" aria-label="Tam Thái Tử game canvas" />
 
       <div data-ui className="absolute right-3 top-3 z-20 flex gap-2">
         {menu && (
@@ -108,8 +108,8 @@ export default function OneMoreRunGame() {
 
       {phase === "ready" && (
         <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 px-4 pb-[10vh] text-center portrait:pb-[22vh] short:gap-2 short:pb-[4vh]!">
-          <h1 className="neon-text text-4xl font-black italic tracking-tight text-neon-cyan sm:text-7xl short:text-4xl!">
-            ONE MORE <span className="text-neon-pink">RUN</span>
+          <h1 lang="vi" className="neon-text font-display text-4xl font-bold italic tracking-normal text-neon-cyan sm:text-7xl short:text-4xl!">
+            TAM THÁI <span className="text-neon-pink">TỬ</span>
           </h1>
           <p className="max-w-md text-xs uppercase tracking-[0.25em] text-cyan-100/70 sm:text-sm short:hidden">
             Tap · Click · Space to jump — tap again mid-air to double jump
@@ -151,7 +151,8 @@ export default function OneMoreRunGame() {
               <span>{result.distance}M</span>
             </div>
             <p className="text-xs tracking-widest text-white/40">
-              {lb.name ? `${lb.name.toUpperCase()} · ` : ""}RUN #{result.run}
+              {lb.name && <span className="font-display font-semibold">{lb.name.toUpperCase()} · </span>}
+              RUN #{result.run}
             </p>
             {status && <SubmitLine status={status} name={lb.name} onSaveName={lb.setName} />}
             <p className="animate-blink mt-5 text-sm font-bold tracking-[0.15em] text-neon-cyan sm:text-lg sm:tracking-[0.3em] short:mt-1">

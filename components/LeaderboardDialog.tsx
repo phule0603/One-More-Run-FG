@@ -36,7 +36,7 @@ function Rows({ rows }: { rows: Row[] }) {
         >
           <span className="text-center text-sm font-bold tabular-nums">{MEDALS[r.rank - 1] ?? r.rank}</span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-bold">{r.name}</span>
+            <span className="block truncate font-display text-sm font-bold">{r.name}</span>
             <span className="block text-[10px] tracking-wider text-cyan-100/45">{r.detail}</span>
           </span>
           <span className="text-base font-black tabular-nums text-neon-yellow">{fmt(r.score)}</span>

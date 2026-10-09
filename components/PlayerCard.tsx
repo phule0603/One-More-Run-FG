@@ -74,7 +74,7 @@ export function NameField({
         autoComplete="nickname"
         enterKeyHint="done"
         spellCheck={false}
-        className="w-full rounded-md border border-cyan-400/40 bg-black/60 px-2.5 py-1.5 text-sm tracking-wider text-white placeholder:text-cyan-100/35 focus:border-cyan-300 focus:outline-none focus:ring-1 focus:ring-cyan-300"
+        className="w-full rounded-md border border-cyan-400/40 bg-black/60 px-2.5 py-1.5 font-display text-sm font-semibold tracking-wider text-white placeholder:text-cyan-100/35 focus:border-cyan-300 focus:outline-none focus:ring-1 focus:ring-cyan-300"
       />
       {invalid && <span className="text-[11px] text-neon-pink">Use letters or numbers.</span>}
     </form>
