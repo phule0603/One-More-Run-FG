@@ -207,15 +207,16 @@ export function drawFigure(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  // far-side limbs, dimmer for depth
-  ctx.globalAlpha = 0.5;
+  // far-side limbs, dimmer for depth (relative to any alpha the caller set)
+  const baseAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = baseAlpha * 0.5;
   ctx.strokeStyle = color;
   ctx.lineWidth = 3.2;
   ctx.beginPath();
   poly(j.hip, j.kneeB, j.footB);
   poly(j.shoulder, j.elbowB, j.handB);
   ctx.stroke();
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = baseAlpha;
 
   // torso: neon-outlined capsule
   ctx.shadowColor = color;

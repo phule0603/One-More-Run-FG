@@ -13,6 +13,20 @@ import {
   TUCK,
 } from "@/lib/character";
 import { BASE_SPEED, COIN_VALUE, MAX_SPEED, METERS_PER_UNIT, RAMP_TIME } from "@/lib/game-config";
+import {
+  drawGift,
+  drawPowerIcon,
+  FIRST_GIFT,
+  GIFT_COLOR,
+  GIFT_EVERY,
+  MAGNET_RADIUS,
+  MAX_LIVES,
+  pickPower,
+  POWERS,
+  SAVE_INVULN,
+  SLOW_FACTOR,
+  type PowerKind,
+} from "@/lib/powerups";
 
 /* =============================================================================
  * Types
@@ -95,7 +109,18 @@ interface Coin {
   x: number;
   y: number;
   taken: boolean;
+  /** being pulled in by the magnet */
+  magnet?: boolean;
 }
+
+interface Gift {
+  x: number;
+  y: number;
+  kind: PowerKind;
+  taken: boolean;
+}
+
+type TimedPower = Exclude<PowerKind, "life">;
 
 interface Particle {
   x: number;
@@ -328,13 +353,20 @@ class Sfx {
     this.tone(220, 40, 0.45, "sawtooth", 0.12);
   }
   start() { this.tone(440, 880, 0.1, "triangle", 0.08); }
+  powerUp() {
+    [523, 659, 784, 1047].forEach((f, i) => this.tone(f, f * 1.01, 0.09, "triangle", 0.09, i * 0.05));
+  }
+  shield() {
+    this.noise(0.2, 0.25);
+    this.tone(330, 990, 0.25, "sawtooth", 0.07);
+  }
 }
 
 /* =============================================================================
  * Engine
  * ========================================================================== */
 
-class Engine {
+export class Engine {
   private ctx: CanvasRenderingContext2D;
   private bg: HTMLCanvasElement;
   private raf = 0;
@@ -362,6 +394,13 @@ class Engine {
   private particles: Particle[] = [];
   private rings: Ring[] = [];
   private texts: FloatText[] = [];
+  private gifts: Gift[] = [];
+  /** seconds left on each timed power-up */
+  private powers: Record<TimedPower, number> = { magnet: 0, ghost: 0, slow: 0, wings: 0 };
+  private lives = 0;
+  private invuln = 0; // seconds of invulnerability after an extra life is used
+  private giftTimer = 0; // seconds until the next gift may appear
+  private slowMul = 1; // eases towards SLOW_FACTOR while slow-mo is active
   private runTime = 0;
   private speed = BASE_SPEED;
   private speedFactor = 1; // narrower screens show less track, so the world scrolls slower
@@ -516,6 +555,12 @@ class Engine {
     this.particles.length = 0;
     this.rings.length = 0;
     this.texts.length = 0;
+    this.gifts.length = 0;
+    this.powers = { magnet: 0, ghost: 0, slow: 0, wings: 0 };
+    this.lives = 0;
+    this.invuln = 0;
+    this.slowMul = 1;
+    this.giftTimer = rand(FIRST_GIFT[0], FIRST_GIFT[1]);
     this.runTime = 0;
     this.speed = BASE_SPEED * this.speedFactor;
     this.diff = 0;
@@ -592,7 +637,7 @@ class Engine {
       p.grounded = false;
       p.coyote = 0;
       p.buffer = 0;
-      p.airJumps = 1;
+      p.airJumps = this.airJumpsMax;
       p.squash = -0.6;
       this.burst(p.x + SIZE / 2, p.y, 12, this.playerColors, 60, 260, 0.35, false, true, -0.5);
       this.sfx.jump();
@@ -632,7 +677,19 @@ class Engine {
   private updatePlaying(dt: number) {
     this.runTime += dt;
     this.diff = 1 - Math.exp(-this.runTime / RAMP_TIME);
-    this.speed = (BASE_SPEED + (MAX_SPEED - BASE_SPEED) * this.diff) * this.speedFactor;
+
+    // power-up timers
+    const ghostWasOn = this.powers.ghost > 0;
+    for (const k of Object.keys(this.powers) as TimedPower[]) this.powers[k] = Math.max(0, this.powers[k] - dt);
+    // ghost never ends inside an obstacle: it holds until the runner is clear
+    if (ghostWasOn && this.powers.ghost === 0 && this.hitsObstacle()) this.powers.ghost = 0.02;
+    if (this.powers.wings === 0 && this.player.airJumps > 1) this.player.airJumps = 1;
+    this.invuln = Math.max(0, this.invuln - dt);
+    this.giftTimer -= dt;
+    const slowTarget = this.powers.slow > 0 ? SLOW_FACTOR : 1;
+    this.slowMul += (slowTarget - this.slowMul) * Math.min(1, dt * 4);
+
+    this.speed = (BASE_SPEED + (MAX_SPEED - BASE_SPEED) * this.diff) * this.speedFactor * this.slowMul;
     const lvl = 1 + Math.floor(this.diff * 10);
     if (lvl > this.level) {
       this.level = lvl;
@@ -657,9 +714,11 @@ class Engine {
       }
     }
     for (const c of this.coins) c.x -= dx;
+    for (const g of this.gifts) g.x -= dx;
     for (const t of this.player.trail) t.x -= dx;
     this.obstacles = this.obstacles.filter((o) => o.x + o.w > -80);
     this.coins = this.coins.filter((c) => c.x > -40 && !c.taken);
+    this.gifts = this.gifts.filter((g) => g.x > -40 && !g.taken);
 
     // spawning
     this.nextSpawn -= dx;
@@ -693,7 +752,7 @@ class Engine {
       }
       p.vy = 0;
       p.grounded = true;
-      p.airJumps = 1;
+      p.airJumps = this.airJumpsMax;
     } else {
       if (wasGrounded) p.coyote = COYOTE;
       p.grounded = false;
@@ -723,7 +782,66 @@ class Engine {
       }
     }
 
-    // collisions
+    // collisions (ghost and post-save invulnerability pass through; an extra life takes the hit)
+    if (this.powers.ghost <= 0 && this.invuln <= 0 && this.hitsObstacle()) {
+      if (this.lives > 0) this.useLife();
+      else {
+        this.die();
+        return;
+      }
+    }
+
+    // coins (the magnet pulls nearby ones in)
+    const pcx = p.x + SIZE / 2;
+    const pcy = p.y + SIZE / 2;
+    for (const c of this.coins) {
+      if (c.taken) continue;
+      if (this.powers.magnet > 0 || c.magnet) {
+        const ddx = pcx - c.x;
+        const ddy = pcy - c.y;
+        const d = Math.hypot(ddx, ddy) || 1;
+        if (c.magnet || d < MAGNET_RADIUS) {
+          c.magnet = true;
+          const pull = (650 + 900 * (1 - Math.min(d, MAGNET_RADIUS) / MAGNET_RADIUS)) * dt;
+          c.x += (ddx / d) * Math.min(d, pull);
+          c.y += (ddy / d) * Math.min(d, pull);
+        }
+      }
+      if (circleRect(c.x, c.y, COIN_R + 4, p.x, p.y, SIZE, SIZE)) {
+        c.taken = true;
+        this.coinCount += 1;
+        this.burst(c.x, c.y, 14, [C_COIN, "#fff7c2"], 60, 320, 0.45, false, true);
+        this.rings.push({ x: c.x, y: c.y, r: 4, grow: 160, life: 0.25, max: 0.25, color: C_COIN });
+        this.texts.push({
+          x: c.x, y: c.y + 18, text: `+${COIN_VALUE}`, life: 0.6, max: 0.6,
+          color: C_COIN, size: 16, vy: 70, screen: false,
+        });
+        this.sfx.coin();
+      }
+    }
+
+    // gifts
+    for (const g of this.gifts) {
+      if (!g.taken && circleRect(g.x, g.y, 16, p.x, p.y, SIZE, SIZE)) {
+        g.taken = true;
+        this.activate(g.kind, g.x, g.y);
+      }
+    }
+
+    // passing the previous best distance
+    if (!this.passedBest && this.distance >= this.bestDist) {
+      this.passedBest = true;
+      this.texts.push({
+        x: this.viewW / 2, y: this.groundY * 0.4, text: "NEW RECORD PACE!",
+        life: 1.3, max: 1.3, color: C_COIN, size: 30, vy: 20, screen: true,
+      });
+      this.burst(p.x + SIZE / 2, p.y + SIZE / 2, 24, [C_COIN, "#ffffff"], 100, 400, 0.6);
+    }
+  }
+
+  /** Whether the runner's hitbox touches any obstacle right now. */
+  private hitsObstacle(): boolean {
+    const p = this.player;
     const hx = p.x + HIT_INSET;
     const hy = p.y + HIT_INSET;
     const hs = SIZE - HIT_INSET * 2;
@@ -750,36 +868,48 @@ class Engine {
           hit = circleRect(o.x + o.r, o.cy, o.r - 3, hx, hy, hs, hs);
           break;
       }
-      if (hit) {
-        this.die();
-        return;
-      }
+      if (hit) return true;
     }
+    return false;
+  }
 
-    // coins
-    for (const c of this.coins) {
-      if (!c.taken && circleRect(c.x, c.y, COIN_R + 4, p.x, p.y, SIZE, SIZE)) {
-        c.taken = true;
-        this.coinCount += 1;
-        this.burst(c.x, c.y, 14, [C_COIN, "#fff7c2"], 60, 320, 0.45, false, true);
-        this.rings.push({ x: c.x, y: c.y, r: 4, grow: 160, life: 0.25, max: 0.25, color: C_COIN });
-        this.texts.push({
-          x: c.x, y: c.y + 18, text: `+${COIN_VALUE}`, life: 0.6, max: 0.6,
-          color: C_COIN, size: 16, vy: 70, screen: false,
-        });
-        this.sfx.coin();
-      }
-    }
+  private get airJumpsMax() {
+    return this.powers.wings > 0 ? 2 : 1;
+  }
 
-    // passing the previous best distance
-    if (!this.passedBest && this.distance >= this.bestDist) {
-      this.passedBest = true;
-      this.texts.push({
-        x: this.viewW / 2, y: this.groundY * 0.4, text: "NEW RECORD PACE!",
-        life: 1.3, max: 1.3, color: C_COIN, size: 30, vy: 20, screen: true,
-      });
-      this.burst(p.x + SIZE / 2, p.y + SIZE / 2, 24, [C_COIN, "#ffffff"], 100, 400, 0.6);
-    }
+  private activate(kind: PowerKind, x: number, y: number) {
+    const spec = POWERS[kind];
+    const p = this.player;
+    if (kind === "life") this.lives = Math.min(MAX_LIVES, this.lives + 1);
+    else this.powers[kind] = spec.duration;
+    if (kind === "wings" && !p.grounded) p.airJumps = Math.min(2, p.airJumps + 1);
+    this.burst(x, y, 22, [GIFT_COLOR, spec.color, "#ffffff"], 80, 380, 0.6, false, true);
+    this.rings.push({ x, y, r: 6, grow: 260, life: 0.35, max: 0.35, color: GIFT_COLOR });
+    this.texts.push({
+      x: this.viewW / 2, y: this.groundY * 0.5, text: spec.label,
+      life: 1, max: 1, color: spec.color, size: 30, vy: 24, screen: true,
+    });
+    this.sfx.powerUp();
+  }
+
+  /** The extra life takes the hit: bounce up and stay invulnerable for a moment. */
+  private useLife() {
+    const p = this.player;
+    this.lives -= 1;
+    this.invuln = SAVE_INVULN;
+    p.vy = Math.max(p.vy, JUMP_V * 0.75);
+    p.grounded = false;
+    p.airJumps = this.airJumpsMax;
+    this.shake = this.reducedMotion ? 0.15 : 0.4;
+    const cx = p.x + SIZE / 2;
+    const cy = p.y + SIZE / 2;
+    this.burst(cx, cy, 30, [POWERS.life.color, "#fde047", "#ffffff"], 120, 520, 0.6);
+    this.rings.push({ x: cx, y: cy, r: 10, grow: 420, life: 0.4, max: 0.4, color: "#fde047" });
+    this.texts.push({
+      x: this.viewW / 2, y: this.groundY * 0.5, text: "SAVED!",
+      life: 1, max: 1, color: "#fde047", size: 34, vy: 24, screen: true,
+    });
+    this.sfx.shield();
   }
 
   private updateEffects(dt: number) {
@@ -842,7 +972,8 @@ class Engine {
   /** Spawns one obstacle pattern off-screen and returns the distance until the next one. */
   private spawnPattern(): number {
     const d = this.diff;
-    const v = this.speed;
+    // nominal speed: patterns spawned during slow-mo must still be spaced for full speed
+    const v = this.speed / this.slowMul;
     const x0 = this.viewW + 60;
     const airSpan = v * ((2 * JUMP_V) / GRAVITY); // horizontal length of a single jump
 
@@ -926,7 +1057,16 @@ class Engine {
     }
 
     const gapTime = Math.max(0.62, 1.15 - d * 0.5) + Math.random() * (0.55 - d * 0.25);
-    return width + gapTime * v;
+    const gap = gapTime * v;
+    // a gift sits in the middle of the gap at running height: grabbing it never needs a risky jump
+    if (this.giftTimer <= 0 && gap > 180) {
+      const kind = pickPower(Math.random, (k) =>
+        k === "life" && this.lives >= MAX_LIVES ? 0 : POWERS[k].weight,
+      );
+      this.gifts.push({ x: x0 + width + gap / 2, y: 22, kind, taken: false });
+      this.giftTimer = rand(GIFT_EVERY[0], GIFT_EVERY[1]);
+    }
+    return width + gap;
   }
 
   private coinArc(cx: number, span: number, peak: number) {
@@ -1052,10 +1192,17 @@ class Engine {
     this.drawGround(ctx);
     this.drawBestMarker(ctx);
     this.drawCoins(ctx);
+    this.drawGifts(ctx);
     this.drawObstacles(ctx);
     if (this.phase !== "dead") this.drawPlayer(ctx);
     this.drawEffects(ctx);
     ctx.restore();
+
+    const slowAmount = (1 - this.slowMul) / (1 - SLOW_FACTOR);
+    if (slowAmount > 0.01) {
+      ctx.fillStyle = `rgba(125,211,252,${0.08 * slowAmount})`;
+      ctx.fillRect(0, 0, W, H);
+    }
 
     if (this.flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${this.flash * 0.6})`;
@@ -1147,6 +1294,43 @@ class Engine {
     ctx.font = "700 13px ui-monospace, Menlo, monospace";
     ctx.textAlign = "center";
     ctx.fillText("BEST", x, G - 238);
+    ctx.restore();
+  }
+
+  private drawGifts(ctx: CanvasRenderingContext2D) {
+    for (const g of this.gifts) {
+      if (g.taken || g.x < -30 || g.x > this.viewW + 30) continue;
+      ctx.save();
+      ctx.translate(g.x, this.sy(g.y + Math.sin(this.time * 4 + g.x * 0.03) * 3));
+      drawGift(ctx, g.kind, 13, this.time);
+      ctx.restore();
+    }
+  }
+
+  /** Neon wings on the runner's back while TRIPLE JUMP is active. */
+  private drawWings(ctx: CanvasRenderingContext2D, at: { x: number; y: number }, flap: number) {
+    ctx.save();
+    ctx.translate(at.x - 3, at.y + 1);
+    ctx.scale(1.5, 1.5);
+    ctx.fillStyle = POWERS.wings.color;
+    ctx.shadowColor = POWERS.wings.color;
+    ctx.shadowBlur = 10;
+    ctx.globalAlpha *= 0.85;
+    // flap 0 = raised up-and-back, 1 = swept down to horizontal
+    const rot = 0.35 - flap * 0.9;
+    for (const [angle, size] of [[rot, 1], [rot - 0.4, 0.8]]) {
+      ctx.save();
+      ctx.rotate(angle);
+      ctx.scale(size, size);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(-6, -14, -20, -16);
+      ctx.quadraticCurveTo(-14, -9, -17, -6);
+      ctx.quadraticCurveTo(-10, -4, -12, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
     ctx.restore();
   }
 
@@ -1336,6 +1520,27 @@ class Engine {
       });
     }
 
+    const ghost = this.powers.ghost > 0;
+    const color = ghost ? POWERS.ghost.color : C_PLAYER;
+    let alpha = 1;
+    if (ghost) alpha = this.powers.ghost < 1 && Math.floor(this.time * 10) % 2 ? 0.25 : 0.55;
+    else if (this.invuln > 0) alpha = Math.floor(this.time * 14) % 2 ? 0.35 : 1;
+
+    if (this.powers.magnet > 0 && this.phase === "playing") {
+      ctx.save();
+      ctx.strokeStyle = POWERS.magnet.color;
+      ctx.globalAlpha = 0.35 + Math.sin(this.time * 8) * 0.1;
+      ctx.setLineDash([6, 8]);
+      ctx.lineDashOffset = -this.time * 40;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy - 4, 46, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
     // scarf: drawn in world space so it always streams behind, even upside down
     const droop = grounded ? 0.45 : 0.45 + p.vy * 0.0022;
     const flutter = this.time * (10 + this.speed / 90);
@@ -1361,14 +1566,40 @@ class Engine {
     ctx.translate(0, BODY.groundY);
     ctx.scale(sx, syScale);
     ctx.translate(0, -BODY.groundY);
-    drawFigure(ctx, j, avatar, C_PLAYER);
+    if (this.powers.wings > 0) this.drawWings(ctx, j.shoulder, p.grounded ? 0.3 : 0.5 + Math.sin(this.time * 14) * 0.5);
+    drawFigure(ctx, j, avatar, color);
+    ctx.restore();
     ctx.restore();
 
+    if (this.lives > 0) {
+      // the extra life: a golden ring circling the runner
+      ctx.save();
+      ctx.translate(cx, cy + 2);
+      ctx.rotate(-0.15);
+      ctx.strokeStyle = "#fde047";
+      ctx.shadowColor = "#fde047";
+      ctx.shadowBlur = 12;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 22, 7, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      const a = this.time * 5;
+      ctx.fillStyle = "#fff7c2";
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * 22, Math.sin(a) * 7, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     if (!p.grounded && p.airJumps > 0 && this.phase === "playing") {
+      // one dot per air jump left
       ctx.save();
       ctx.fillStyle = "rgba(240,171,252,0.8)";
       ctx.beginPath();
-      ctx.arc(p.x + half, this.sy(p.y) + 8, 2.5, 0, Math.PI * 2);
+      for (let i = 0; i < p.airJumps; i++) {
+        ctx.moveTo(p.x + half + (i - (p.airJumps - 1) / 2) * 7 + 2.5, this.sy(p.y) + 8);
+        ctx.arc(p.x + half + (i - (p.airJumps - 1) / 2) * 7, this.sy(p.y) + 8, 2.5, 0, Math.PI * 2);
+      }
       ctx.fill();
       ctx.restore();
     }
@@ -1429,6 +1660,30 @@ class Engine {
     ctx.fillText(`BEST ${Math.max(this.best, this.score())}`, 24, 64);
     ctx.fillStyle = C_COIN;
     ctx.fillText(`◆ ${this.coinCount}`, 24, 84);
+
+    // active power-ups: icon + time left
+    let row = 0;
+    const show = (kind: PowerKind, left: number | null, text = "") => {
+      const y = 116 + row * 22;
+      ctx.save();
+      ctx.translate(31, y);
+      drawPowerIcon(ctx, kind, 16);
+      ctx.restore();
+      if (left === null) {
+        ctx.fillStyle = POWERS[kind].color;
+        ctx.fillText(text, 46, y - 7);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.12)";
+        ctx.fillRect(46, y - 2, 64, 4);
+        ctx.fillStyle = POWERS[kind].color;
+        ctx.fillRect(46, y - 2, 64 * left, 4);
+      }
+      row++;
+    };
+    if (this.lives > 0) show("life", null, `x${this.lives}`);
+    for (const k of Object.keys(this.powers) as TimedPower[]) {
+      if (this.powers[k] > 0) show(k, Math.min(1, this.powers[k] / POWERS[k].duration));
+    }
 
     // speed meter
     ctx.textAlign = "right";
