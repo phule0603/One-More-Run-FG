@@ -1,0 +1,93 @@
+name: CI & Deploy to Vercel
+
+# Every push: typecheck, unit tests and a production build.
+# If those pass and the Vercel secrets are set, deploy: pushes to PRODUCTION_BRANCH
+# go to production, every other branch gets its own preview URL.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PRODUCTION_BRANCH: main
+  VERCEL_CLI: vercel@63.1.0
+
+jobs:
+  check:
+    name: Typecheck · Test · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    name: Deploy to Vercel
+    needs: check
+    # PRs are only checked: their branch was already deployed by its push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Check Vercel secrets and pick the target
+        id: setup
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::notice title=Deploy skipped::Add the VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID repository secrets to deploy automatically (see README)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_NAME" = "$PRODUCTION_BRANCH" ]; then
+            echo "target=production" >> "$GITHUB_OUTPUT"
+            echo "flag=--prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=preview" >> "$GITHUB_OUTPUT"
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.setup.outputs.enabled == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.setup.outputs.enabled == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Pull Vercel project settings and env vars
+        if: steps.setup.outputs.enabled == 'true'
+        run: npx --yes "$VERCEL_CLI" pull --yes --environment=${{ steps.setup.outputs.target }} --token="$VERCEL_TOKEN"
+
+      - name: Build
+        if: steps.setup.outputs.enabled == 'true'
+        run: npx --yes "$VERCEL_CLI" build ${{ steps.setup.outputs.flag }} --token="$VERCEL_TOKEN"
+
+      - name: Deploy
+        if: steps.setup.outputs.enabled == 'true'
+        run: |
+          url=$(npx --yes "$VERCEL_CLI" deploy --prebuilt ${{ steps.setup.outputs.flag }} --token="$VERCEL_TOKEN")
+          echo "::notice title=Deployed (${{ steps.setup.outputs.target }})::$url"
+          {
+            echo "### 🚀 Deployed to ${{ steps.setup.outputs.target }}"
+            echo ""
+            echo "$url"
+          } >> "$GITHUB_STEP_SUMMARY"

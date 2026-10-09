@@ -1,6 +1,7 @@
 "use client";
 
 import { RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { BASE_SPEED, COIN_VALUE, MAX_SPEED, METERS_PER_UNIT, RAMP_TIME } from "@/lib/game-config";
 
 /* =============================================================================
  * Types
@@ -15,6 +16,14 @@ export interface RunResult {
   distance: number;
   isNewBest: boolean;
   run: number;
+  durationMs: number;
+}
+
+export interface GameOptions {
+  onRunStart?: (run: number) => void;
+  onRunEnd?: (result: RunResult) => void;
+  /** While true, keyboard and tap input don't reach the game (e.g. a dialog is open). */
+  inputBlockedRef?: RefObject<boolean>;
 }
 
 export interface GameHud {
@@ -24,11 +33,15 @@ export interface GameHud {
   runs: number;
   muted: boolean;
   toggleMute: () => void;
+  /** Draws the player as this image (null restores the neon cube); colors tint its particles. */
+  setAvatar: (image: CanvasImageSource | null, colors?: string[]) => void;
 }
 
 interface EngineCallbacks {
   onPhase: (phase: Phase, result: RunResult | null) => void;
   onMeta: (best: number, runs: number, muted: boolean) => void;
+  onRunStart: (run: number) => void;
+  onRunEnd: (result: RunResult) => void;
 }
 
 interface Player {
@@ -139,16 +152,11 @@ const SIZE = 34;
 const HIT_INSET = 4;
 const SPIN_SPEED = 8;
 
-const BASE_SPEED = 380;
-const MAX_SPEED = 940;
-const RAMP_TIME = 75; // seconds for ~63% of the ramp
 const REF_LOOKAHEAD = 772; // visible track ahead of the player on a 16:9 screen
 const MIN_SPEED_FACTOR = 0.75;
 
 const RETRY_LOCK = 0.3; // seconds after death before input restarts
-const COIN_VALUE = 10;
 const COIN_R = 10;
-const METERS_PER_UNIT = 1 / 12;
 const MAX_PARTICLES = 800;
 
 const KEY_BEST = "omr:best";
@@ -227,6 +235,16 @@ function polysIntersect(a: Vec[], b: Vec[]) {
     }
   }
   return true;
+}
+
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
 
 /* =============================================================================
@@ -348,6 +366,10 @@ class Engine {
   private flash = 0;
   private passedBest = false;
 
+  // personalisation
+  private avatar: CanvasImageSource | null = null;
+  private avatarColors: string[] = [];
+
   // decorative
   private reducedMotion = false;
   private skyline: SkylineLayer[] = [];
@@ -418,6 +440,16 @@ class Engine {
     this.groundGrad.addColorStop(1, "#05010f");
   }
 
+  setAvatar(image: CanvasImageSource | null, colors: string[] = []) {
+    this.avatar = image;
+    this.avatarColors = image ? colors.slice(0, 4) : [];
+  }
+
+  /** Particle colours for the player: the photo's palette, or the default cyan. */
+  private get playerColors() {
+    return this.avatarColors.length ? this.avatarColors : [C_PLAYER, "#a5f3fc"];
+  }
+
   toggleMute() {
     this.sfx.muted = !this.sfx.muted;
     storageSet(KEY_MUTED, this.sfx.muted ? 1 : 0);
@@ -485,9 +517,10 @@ class Engine {
     storageSet(KEY_RUNS, this.runs);
     this.phase = "playing";
     this.sfx.start();
-    this.burst(this.player.x + SIZE / 2, SIZE / 2, 18, [C_PLAYER, "#ffffff"], 120, 420, 0.5);
+    this.burst(this.player.x + SIZE / 2, SIZE / 2, 18, [this.playerColors[0], "#ffffff"], 120, 420, 0.5);
     this.cb.onPhase("playing", null);
     this.cb.onMeta(this.best, this.runs, this.sfx.muted);
+    this.cb.onRunStart(this.runs);
   }
 
   private score() {
@@ -505,7 +538,8 @@ class Engine {
     const p = this.player;
     const cx = p.x + SIZE / 2;
     const cy = p.y + SIZE / 2;
-    this.burst(cx, cy, 70, [C_PLAYER, "#ffffff", C_SPIKE], 200, 950, 1.1, true);
+    const shards = this.avatarColors.length ? [...this.avatarColors, "#ffffff"] : [C_PLAYER, "#ffffff", C_SPIKE];
+    this.burst(cx, cy, 70, shards, 200, 950, 1.1, true);
     this.burst(cx, cy, 30, [C_COIN, "#ffffff"], 80, 420, 0.8);
     this.rings.push({ x: cx, y: cy, r: 8, grow: 900, life: 0.45, max: 0.45, color: "#ffffff" });
     this.rings.push({ x: cx, y: cy, r: 4, grow: 520, life: 0.6, max: 0.6, color: C_SPIKE });
@@ -528,9 +562,11 @@ class Engine {
       distance: Math.floor(this.distance * METERS_PER_UNIT),
       isNewBest,
       run: this.runs,
+      durationMs: Math.round(this.runTime * 1000),
     };
     this.cb.onPhase("dead", result);
     this.cb.onMeta(this.best, this.runs, this.sfx.muted);
+    this.cb.onRunEnd(result);
   }
 
   /* ------------------------------------------------------------------ physics */
@@ -544,7 +580,7 @@ class Engine {
       p.buffer = 0;
       p.airJumps = 1;
       p.squash = -0.6;
-      this.burst(p.x + SIZE / 2, p.y, 12, [C_PLAYER, "#a5f3fc"], 60, 260, 0.35, false, true, -0.5);
+      this.burst(p.x + SIZE / 2, p.y, 12, this.playerColors, 60, 260, 0.35, false, true, -0.5);
       this.sfx.jump();
     } else if (p.airJumps > 0) {
       p.vy = DJUMP_V;
@@ -553,7 +589,7 @@ class Engine {
       p.squash = -0.5;
       const cx = p.x + SIZE / 2;
       this.rings.push({ x: cx, y: p.y, r: 6, grow: 260, life: 0.3, max: 0.3, color: C_PLAYER });
-      this.burst(cx, p.y, 14, [C_PLAYER, "#f0abfc"], 80, 300, 0.4, false, true, -0.9);
+      this.burst(cx, p.y, 14, [this.playerColors[0], "#f0abfc"], 80, 300, 0.4, false, true, -0.9);
       this.sfx.doubleJump();
     }
   }
@@ -634,7 +670,7 @@ class Engine {
       ny = floor;
       if (!wasGrounded && p.vy < -200) {
         p.squash = 0.8;
-        this.burst(p.x + SIZE / 2, floor, 8, [C_PLAYER], 40, 180, 0.3, false, true, 0.2);
+        this.burst(p.x + SIZE / 2, floor, 8, [this.playerColors[0]], 40, 180, 0.3, false, true, 0.2);
       }
       p.vy = 0;
       p.grounded = true;
@@ -653,7 +689,7 @@ class Engine {
       if (Math.random() < dt * 30) {
         this.particles.push({
           x: p.x + 2, y: p.y + 1, vx: -rand(40, 120), vy: rand(20, 90), life: 0.3, max: 0.3,
-          size: rand(1.5, 3), color: C_PLAYER, drag: 2, gravity: 300, square: true, scroll: true,
+          size: rand(1.5, 3), color: this.playerColors[0], drag: 2, gravity: 300, square: true, scroll: true,
         });
       }
     } else {
@@ -1231,16 +1267,22 @@ class Engine {
       p.trail.push({ x: p.x + half, y: p.y + half, rot: p.rot });
       if (p.trail.length > 7) p.trail.shift();
     }
+    const avatar = this.avatar;
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+    if (!avatar) ctx.globalCompositeOperation = "lighter";
     p.trail.forEach((t, i) => {
       const a = (i + 1) / (p.trail.length + 1);
       const s = SIZE * (0.4 + a * 0.5);
       ctx.save();
       ctx.translate(t.x, this.sy(t.y));
       ctx.rotate(t.rot);
-      ctx.fillStyle = `rgba(34,211,238,${a * 0.22})`;
-      ctx.fillRect(-s / 2, -s / 2, s, s);
+      if (avatar) {
+        ctx.globalAlpha = a * 0.3;
+        ctx.drawImage(avatar, -s / 2, -s / 2, s, s);
+      } else {
+        ctx.fillStyle = `rgba(34,211,238,${a * 0.22})`;
+        ctx.fillRect(-s / 2, -s / 2, s, s);
+      }
       ctx.restore();
     });
     ctx.restore();
@@ -1257,15 +1299,30 @@ class Engine {
     ctx.shadowColor = C_PLAYER;
     ctx.shadowBlur = 22;
     ctx.fillStyle = "#083344";
-    ctx.fillRect(-half, -half, SIZE, SIZE);
-    ctx.strokeStyle = C_PLAYER;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(-half + 1.5, -half + 1.5, SIZE - 3, SIZE - 3);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = C_PLAYER;
-    ctx.fillRect(-7, -7, 14, 14);
-    ctx.fillStyle = "#ecfeff";
-    ctx.fillRect(-3, -3, 6, 6);
+    if (avatar) {
+      // photo character: glow, then the image clipped to a rounded tile, then a neon rim
+      roundRectPath(ctx, -half, -half, SIZE, SIZE, 7);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.save();
+      ctx.clip();
+      ctx.drawImage(avatar, -half, -half, SIZE, SIZE);
+      ctx.restore();
+      ctx.strokeStyle = C_PLAYER;
+      ctx.lineWidth = 2.5;
+      roundRectPath(ctx, -half + 1.25, -half + 1.25, SIZE - 2.5, SIZE - 2.5, 6);
+      ctx.stroke();
+    } else {
+      ctx.fillRect(-half, -half, SIZE, SIZE);
+      ctx.strokeStyle = C_PLAYER;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(-half + 1.5, -half + 1.5, SIZE - 3, SIZE - 3);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = C_PLAYER;
+      ctx.fillRect(-7, -7, 14, 14);
+      ctx.fillStyle = "#ecfeff";
+      ctx.fillRect(-3, -3, 6, 6);
+    }
     ctx.restore();
 
     if (!p.grounded && p.airJumps > 0 && this.phase === "playing") {
@@ -1352,8 +1409,16 @@ class Engine {
  * React hook
  * ========================================================================== */
 
-export function useOneMoreRun(canvasRef: RefObject<HTMLCanvasElement | null>): GameHud {
+export function useOneMoreRun(
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  options: GameOptions = {},
+): GameHud {
   const engineRef = useRef<Engine | null>(null);
+  const optionsRef = useRef(options);
+  const avatarRef = useRef<{ image: CanvasImageSource | null; colors: string[] }>({
+    image: null,
+    colors: [],
+  });
   const [phase, setPhase] = useState<Phase>("ready");
   const [result, setResult] = useState<RunResult | null>(null);
   const [best, setBest] = useState(0);
@@ -1374,25 +1439,41 @@ export function useOneMoreRun(canvasRef: RefObject<HTMLCanvasElement | null>): G
         setRuns(r);
         setMuted(m);
       },
+      onRunStart: (run) => optionsRef.current.onRunStart?.(run),
+      onRunEnd: (res) => optionsRef.current.onRunEnd?.(res),
     });
     engineRef.current = engine;
+    engine.setAvatar(avatarRef.current.image, avatarRef.current.colors);
     engine.start();
 
+    const blocked = () => optionsRef.current.inputBlockedRef?.current === true;
     const isUi = (target: EventTarget | null) =>
       target instanceof Element && target.closest("[data-ui]") !== null;
+    const isEditable = (target: EventTarget | null) =>
+      target instanceof HTMLElement &&
+      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    const isControl = (target: EventTarget | null) =>
+      target instanceof Element && target.closest("button, a, [role='button']") !== null;
 
     const onPointerDown = (e: PointerEvent) => {
-      if (isUi(e.target)) return;
+      if (blocked() || isUi(e.target)) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
+      // tapping the game commits a half-typed name (preventDefault below would keep focus)
+      const active = document.activeElement;
+      if (isEditable(active)) (active as HTMLElement).blur();
       e.preventDefault();
       engine.press();
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      // typing a name or using a dialog must never jump / restart / mute
+      if (blocked() || isEditable(e.target)) return;
       if (e.code === "KeyM") {
         engine.toggleMute();
         return;
       }
       if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW" || e.code === "Enter") {
+        // a focused button handles its own Space / Enter
+        if ((e.code === "Space" || e.code === "Enter") && isControl(e.target)) return;
         e.preventDefault();
         if (!e.repeat) engine.press();
       }
@@ -1421,7 +1502,15 @@ export function useOneMoreRun(canvasRef: RefObject<HTMLCanvasElement | null>): G
     };
   }, [canvasRef]);
 
-  const toggleMute = useCallback(() => engineRef.current?.toggleMute(), []);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
 
-  return { phase, result, best, runs, muted, toggleMute };
+  const toggleMute = useCallback(() => engineRef.current?.toggleMute(), []);
+  const setAvatar = useCallback((image: CanvasImageSource | null, colors: string[] = []) => {
+    avatarRef.current = { image, colors };
+    engineRef.current?.setAvatar(image, colors);
+  }, []);
+
+  return { phase, result, best, runs, muted, toggleMute, setAvatar };
 }
