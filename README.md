@@ -40,9 +40,14 @@ npm start
 Dự án đã có sẵn `vercel.json` (framework `nextjs`), không cần cấu hình thêm.
 
 ```bash
-npx vercel          # lần đầu: đăng nhập + trả lời vài câu hỏi (giữ mặc định) → tạo bản Preview
+npx vercel login    # chỉ cần làm 1 lần: mở trình duyệt để đăng nhập (GitHub / Google / Email)
+npx vercel          # tạo bản Preview (trả lời vài câu hỏi, giữ mặc định)
 npx vercel --prod   # deploy lên Production
 ```
+
+> **Lỗi `No existing credentials found`?** Bạn chưa đăng nhập — chạy `npx vercel login` trước.
+> Nên chạy trong terminal thường: khi chạy bên trong công cụ AI (Cursor, Claude Code…), Vercel CLI tự chuyển sang chế độ không tương tác nên không hỏi đăng nhập.
+> Muốn deploy ngay mà chưa cần tài khoản: `npx vercel deploy --temporary` tạo bản deploy tạm thời, có thể nhận (claim) về tài khoản sau.
 
 Khi CLI hỏi, cứ nhấn Enter để chấp nhận mặc định:
 
