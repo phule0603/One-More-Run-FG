@@ -59,6 +59,16 @@ describe.each(backends)("%s", (_, make) => {
     expect((await store.top(5)).map((e) => e.name)).toEqual(["Neo"]);
   });
 
+  it("stores, lists and removes shared avatars", async () => {
+    const store = make();
+    await store.submit(entry(1, 100));
+    await store.submit(entry(2, 50));
+    await store.setAvatar(id(1), "data:image/jpeg;base64,AAAA");
+    expect((await store.top(5)).map((e) => e.avatar)).toEqual(["data:image/jpeg;base64,AAAA", null]);
+    await store.setAvatar(id(1), null);
+    expect((await store.top(5)).map((e) => e.avatar)).toEqual([null, null]);
+  });
+
   it("burns each nonce once", async () => {
     const store = make();
     expect(await store.claimNonce("abc", 60)).toBe(true);

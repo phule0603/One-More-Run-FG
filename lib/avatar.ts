@@ -5,6 +5,8 @@
  */
 
 export const AVATAR_PX = 128;
+/** Leaderboard thumbnails are tiny: a few KB, never the original photo. */
+export const THUMB_PX = 48;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const STORAGE_KEY = "omr:avatar";
 const TILE_BG = "#083344";
@@ -14,6 +16,8 @@ export interface Avatar {
   dataUrl: string;
   /** a few vivid colours sampled from the photo, used for the particles */
   colors: string[];
+  /** 48×48 JPEG data URL, the only version that may be shared on the leaderboard */
+  thumb: string;
 }
 
 export type AvatarErrorCode = "not_image" | "too_large" | "unreadable";
@@ -91,10 +95,21 @@ export async function createAvatar(file: File): Promise<Avatar> {
     }
 
     const colors = palette(ctx.getImageData(0, 0, AVATAR_PX, AVATAR_PX).data);
-    return { dataUrl: canvas.toDataURL("image/jpeg", 0.88), colors };
+    return { dataUrl: canvas.toDataURL("image/jpeg", 0.88), colors, thumb: thumbnail(canvas) };
   } finally {
     img.release();
   }
+}
+
+function thumbnail(source: CanvasImageSource): string {
+  const { canvas, ctx } = canvas2d(THUMB_PX);
+  ctx.drawImage(source, 0, 0, THUMB_PX, THUMB_PX);
+  return canvas.toDataURL("image/jpeg", 0.75);
+}
+
+/** Thumbnail for an avatar saved before thumbnails existed. */
+export async function makeThumb(dataUrl: string): Promise<string> {
+  return thumbnail(await loadImage(dataUrl));
 }
 
 /* --------------------------------------------------------------- palette */
@@ -172,7 +187,8 @@ export function loadStoredAvatar(): Avatar | null {
     const colors = Array.isArray(a.colors)
       ? a.colors.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c))
       : [];
-    return { dataUrl: a.dataUrl, colors };
+    const thumb = typeof a.thumb === "string" && a.thumb.startsWith("data:image/jpeg") ? a.thumb : "";
+    return { dataUrl: a.dataUrl, colors, thumb };
   } catch {
     return null;
   }
@@ -186,6 +202,25 @@ export function storeAvatar(avatar: Avatar | null): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+const SHARE_KEY = "omr:shareAvatar";
+
+/** Whether the player agreed to show their photo on the global leaderboard (off by default). */
+export function loadShareAvatar(): boolean {
+  try {
+    return window.localStorage.getItem(SHARE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function storeShareAvatar(share: boolean) {
+  try {
+    window.localStorage.setItem(SHARE_KEY, share ? "1" : "0");
+  } catch {
+    /* not persisted: the choice still applies for this visit */
   }
 }
 

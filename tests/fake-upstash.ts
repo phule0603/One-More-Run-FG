@@ -92,6 +92,13 @@ export function createFakeRedis(token = "test-token") {
         }
         return created;
       }
+      case "HDEL": {
+        const [key, ...fields] = args;
+        const h = hash(key);
+        let removed = 0;
+        for (const f of fields) if (h.delete(f)) removed++;
+        return removed;
+      }
       case "HMGET": {
         const [key, ...fields] = args;
         const h = hash(key);

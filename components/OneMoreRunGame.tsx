@@ -72,6 +72,13 @@ export default function OneMoreRunGame() {
     setAvatar(avatar.image, avatar.avatar?.colors);
   }, [avatar.image, avatar.avatar, setAvatar]);
 
+  // the photo goes on the global board only if the player opted in
+  const sharedThumb = avatar.share ? (avatar.avatar?.thumb ?? null) : null;
+  const { setSharedAvatar } = lb;
+  useEffect(() => {
+    if (avatar.ready) setSharedAvatar(sharedThumb);
+  }, [avatar.ready, sharedThumb, setSharedAvatar]);
+
   useEffect(() => {
     inputBlockedRef.current = boardOpen;
   }, [boardOpen]);
@@ -122,6 +129,8 @@ export default function OneMoreRunGame() {
             avatarError={avatar.error}
             onUpload={avatar.upload}
             onResetAvatar={avatar.reset}
+            shareAvatar={avatar.share}
+            onShareAvatar={avatar.setShare}
           />
           {best > 0 && (
             <p className="text-sm tracking-widest text-neon-yellow">
@@ -168,6 +177,7 @@ export default function OneMoreRunGame() {
         global={lb.global}
         local={lb.local}
         playerName={lb.name}
+        localAvatar={avatar.avatar?.thumb ?? null}
         onRefresh={lb.refresh}
       />
     </div>

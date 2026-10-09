@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { DefaultHead } from "@/components/PlayerCard";
 import type { GlobalBoard, LocalEntry } from "@/hooks/useLeaderboard";
 
 interface LeaderboardDialogProps {
@@ -9,6 +10,8 @@ interface LeaderboardDialogProps {
   global: GlobalBoard;
   local: LocalEntry[];
   playerName: string;
+  /** this device's photo thumbnail, shown on the THIS DEVICE tab */
+  localAvatar: string | null;
   onRefresh: () => void;
 }
 
@@ -18,6 +21,7 @@ interface Row {
   name: string;
   score: number;
   detail: string;
+  avatar: string | null;
   you: boolean;
 }
 
@@ -30,11 +34,14 @@ function Rows({ rows }: { rows: Row[] }) {
       {rows.map((r) => (
         <li
           key={r.key}
-          className={`grid grid-cols-[2.25rem_1fr_auto] items-center gap-2 rounded-md px-2 py-1.5 ${
+          className={`grid grid-cols-[2.25rem_2rem_1fr_auto] items-center gap-2 rounded-md px-2 py-1.5 ${
             r.you ? "bg-cyan-400/15 text-white ring-1 ring-cyan-300/50" : "text-cyan-50/90"
           }`}
         >
           <span className="text-center text-sm font-bold tabular-nums">{MEDALS[r.rank - 1] ?? r.rank}</span>
+          <span className="h-8 w-8 overflow-hidden rounded-full border border-cyan-400/50">
+            {r.avatar ? <img src={r.avatar} alt="" className="h-full w-full object-cover" /> : <DefaultHead />}
+          </span>
           <span className="min-w-0">
             <span className="block truncate font-display text-sm font-bold">{r.name}</span>
             <span className="block text-[10px] tracking-wider text-cyan-100/45">{r.detail}</span>
@@ -56,6 +63,7 @@ export default function LeaderboardDialog({
   global,
   local,
   playerName,
+  localAvatar,
   onRefresh,
 }: LeaderboardDialogProps) {
   const [tab, setTab] = useState<"global" | "local">("global");
@@ -80,6 +88,7 @@ export default function LeaderboardDialog({
     name: e.name,
     score: e.score,
     detail: `${fmt(e.distance)} M · ◆ ${e.coins}`,
+    avatar: e.avatar,
     you: e.you,
   }));
   const localRows: Row[] = local.map((e, i) => ({
@@ -88,6 +97,7 @@ export default function LeaderboardDialog({
     name: e.name || playerName || "YOU",
     score: e.score,
     detail: `${fmt(e.distance)} M · ◆ ${e.coins} · ${new Date(e.at).toLocaleDateString()}`,
+    avatar: localAvatar,
     you: false,
   }));
   const youOutsideTop = global.you && !global.entries.some((e) => e.you) ? global.you : null;

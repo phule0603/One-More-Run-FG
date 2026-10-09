@@ -18,6 +18,7 @@ const KEY_PLAYER = "omr:playerId";
 const KEY_NAME = "omr:name";
 const KEY_LOCAL = "omr:localBoard";
 const KEY_GLOBAL_BEST = "omr:globalBest";
+const KEY_AVATAR_SENT = "omr:avatarSent";
 
 export interface LocalEntry {
   name: string;
@@ -75,6 +76,14 @@ function readLocalBoard(): LocalEntry[] {
   }
 }
 
+/** Short fingerprint of the avatar last sent to the server, so it is only re-sent when it changes. */
+function avatarHash(avatar: string | null): string {
+  if (avatar === null) return "none";
+  let h = 0x811c9dc5;
+  for (let i = 0; i < avatar.length; i++) h = Math.imul(h ^ avatar.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16) + ":" + avatar.length;
+}
+
 async function requestToken(): Promise<string | null> {
   try {
     const res = await fetch("/api/leaderboard/token", { method: "POST" });
@@ -104,6 +113,26 @@ export function useLeaderboard() {
   const globalBestRef = useRef(0);
   const tokensRef = useRef(new Map<number, Promise<string | null>>());
   const pendingRef = useRef<{ result: RunResult; token: Promise<string | null> } | null>(null);
+  /** thumbnail the player chose to share; undefined until the photo has loaded */
+  const avatarRef = useRef<string | null | undefined>(undefined);
+
+  /** Brings the server's copy of the shared photo in line with the player's choice. */
+  const syncAvatar = useCallback(() => {
+    const avatar = avatarRef.current;
+    if (avatar === undefined || enabledRef.current !== true || globalBestRef.current <= 0) return;
+    const hash = avatarHash(avatar);
+    if (hash === read(KEY_AVATAR_SENT)) return;
+    void fetch("/api/leaderboard", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: playerIdRef.current, avatar }),
+    })
+      .then((res) => res.json() as Promise<RenameResponse>)
+      .then((data) => {
+        if (data.ok) write(KEY_AVATAR_SENT, hash);
+      })
+      .catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     setGlobal((g) => ({ ...g, loading: true }));
@@ -117,10 +146,11 @@ export function useLeaderboard() {
         write(KEY_GLOBAL_BEST, String(data.you.score));
       }
       setGlobal({ enabled: data.enabled, entries: data.entries, you: data.you, loading: false, error: !res.ok });
+      syncAvatar();
     } catch {
       setGlobal((g) => ({ ...g, loading: false, error: true }));
     }
-  }, []);
+  }, [syncAvatar]);
 
   useEffect(() => {
     let id = read(KEY_PLAYER);
@@ -158,6 +188,7 @@ export function useLeaderboard() {
             distance: result.distance,
             coins: result.coins,
             durationMs: result.durationMs,
+            avatar: avatarRef.current,
           }),
         });
         const data = (await res.json()) as SubmitResponse;
@@ -165,6 +196,7 @@ export function useLeaderboard() {
           setStatus({ run, state: "error", error: data.error });
           return;
         }
+        if (avatarRef.current !== undefined) write(KEY_AVATAR_SENT, avatarHash(avatarRef.current));
         if (data.best > globalBestRef.current) {
           globalBestRef.current = data.best;
           write(KEY_GLOBAL_BEST, String(data.best));
@@ -261,5 +293,14 @@ export function useLeaderboard() {
     [refresh, submit],
   );
 
-  return { name, setName, local, global, status, refresh, onRunStart, onRunEnd };
+  /** The thumbnail to show on the global board (null = don't share). */
+  const setSharedAvatar = useCallback(
+    (avatar: string | null) => {
+      avatarRef.current = avatar;
+      syncAvatar();
+    },
+    [syncAvatar],
+  );
+
+  return { name, setName, local, global, status, refresh, onRunStart, onRunEnd, setSharedAvatar };
 }

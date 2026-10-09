@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { COIN_VALUE } from "@/lib/game-config";
 import {
+  AVATAR_MAX_BYTES,
   checkRun,
   isPlayerId,
   maxMetersForDuration,
   NAME_MAX_LENGTH,
+  parseAvatar,
   parseSubmitRequest,
   sanitizeName,
 } from "@/lib/leaderboard/shared";
@@ -104,5 +106,29 @@ describe("parseSubmitRequest", () => {
     expect(parseSubmitRequest({ ...ok, token: undefined })).toBeNull();
     expect(parseSubmitRequest(null)).toBeNull();
     expect(parseSubmitRequest("x")).toBeNull();
+  });
+});
+
+describe("parseAvatar", () => {
+  const jpeg = (body = "abc", size = 0) =>
+    "data:image/jpeg;base64," +
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...Buffer.from(body + "x".repeat(size)), 0xff, 0xd9]).toString("base64");
+
+  it("accepts small JPEG data URLs and passes null / undefined through", () => {
+    expect(parseAvatar(jpeg())).toBe(jpeg());
+    expect(parseAvatar(null)).toBeNull();
+    expect(parseAvatar(undefined)).toBeUndefined();
+  });
+
+  it("rejects anything that isn't a small, well-formed JPEG", () => {
+    const svg = "data:image/svg+xml;base64," + Buffer.from("<svg onload=alert(1)>").toString("base64");
+    const png = "data:image/png;base64," + Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
+    const noEnd = "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 0xff, 0x00]).toString("base64");
+    expect(parseAvatar(svg)).toBe(false);
+    expect(parseAvatar(png)).toBe(false);
+    expect(parseAvatar(noEnd)).toBe(false);
+    expect(parseAvatar("data:image/jpeg;base64,@@@")).toBe(false);
+    expect(parseAvatar(jpeg("", AVATAR_MAX_BYTES))).toBe(false);
+    expect(parseAvatar(42)).toBe(false);
   });
 });

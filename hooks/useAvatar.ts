@@ -1,7 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AvatarError, createAvatar, loadImage, loadStoredAvatar, storeAvatar, type Avatar } from "@/lib/avatar";
+import {
+  AvatarError,
+  createAvatar,
+  loadImage,
+  loadShareAvatar,
+  loadStoredAvatar,
+  makeThumb,
+  storeAvatar,
+  storeShareAvatar,
+  type Avatar,
+} from "@/lib/avatar";
 
 const MESSAGES: Record<string, string> = {
   not_image: "That file isn't an image.",
@@ -9,11 +19,14 @@ const MESSAGES: Record<string, string> = {
   unreadable: "Couldn't read that image — try a JPG or PNG.",
 };
 
-/** The player's photo character: loaded from this device, replaced by upload, or reset. */
+/** The player's photo: loaded from this device, replaced by upload, or reset; sharing is opt-in. */
 export function useAvatar() {
   const [avatar, setAvatar] = useState<Avatar | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [share, setShareState] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** true once the photo saved on this device (if any) has been loaded */
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const apply = useCallback(async (next: Avatar | null) => {
@@ -23,8 +36,20 @@ export function useAvatar() {
   }, []);
 
   useEffect(() => {
+    setShareState(loadShareAvatar());
     const stored = loadStoredAvatar();
-    if (stored) apply(stored).catch(() => storeAvatar(null));
+    if (!stored) {
+      setReady(true);
+      return;
+    }
+    (async () => {
+      // photos saved before leaderboard thumbnails existed get one now
+      const withThumb = stored.thumb ? stored : { ...stored, thumb: await makeThumb(stored.dataUrl) };
+      if (withThumb !== stored) storeAvatar(withThumb);
+      await apply(withThumb);
+    })()
+      .catch(() => storeAvatar(null))
+      .finally(() => setReady(true));
   }, [apply]);
 
   const upload = useCallback(
@@ -50,5 +75,10 @@ export function useAvatar() {
     void apply(null);
   }, [apply]);
 
-  return { avatar, image, busy, error, upload, reset };
+  const setShare = useCallback((next: boolean) => {
+    storeShareAvatar(next);
+    setShareState(next);
+  }, []);
+
+  return { avatar, image, share, setShare, ready, busy, error, upload, reset };
 }

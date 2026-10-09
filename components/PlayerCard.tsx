@@ -11,6 +11,8 @@ interface PlayerCardProps {
   avatarError: string | null;
   onUpload: (file: File) => void;
   onResetAvatar: () => void;
+  shareAvatar: boolean;
+  onShareAvatar: (share: boolean) => void;
 }
 
 /** Releases focus after a click so Space keeps controlling the game. */
@@ -90,6 +92,8 @@ export default function PlayerCard({
   avatarError,
   onUpload,
   onResetAvatar,
+  shareAvatar,
+  onShareAvatar,
 }: PlayerCardProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const pickPhoto = () => fileRef.current?.click();
@@ -138,6 +142,21 @@ export default function PlayerCard({
         </div>
         {avatarError ? (
           <p className="text-[11px] text-neon-pink">{avatarError}</p>
+        ) : avatarUrl ? (
+          <label className="flex cursor-pointer items-start gap-1.5 text-[10px] leading-snug text-cyan-100/70">
+            <input
+              type="checkbox"
+              checked={shareAvatar}
+              onChange={(e) => {
+                onShareAvatar(e.target.checked);
+                e.currentTarget.blur();
+              }}
+              className="mt-px accent-cyan-400"
+            />
+            <span>
+              Show my photo on the global leaderboard <span className="text-cyan-100/40">(visible to everyone)</span>
+            </span>
+          </label>
         ) : (
           <p className="text-[10px] leading-snug text-cyan-100/45">Your photo stays on this device.</p>
         )}

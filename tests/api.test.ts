@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GET, PATCH, POST } from "@/app/api/leaderboard/route";
+import { DELETE, GET, PATCH, POST } from "@/app/api/leaderboard/route";
 import { POST as issueToken } from "@/app/api/leaderboard/token/route";
 import { COIN_VALUE } from "@/lib/game-config";
 import type { LeaderboardResponse } from "@/lib/leaderboard/shared";
@@ -181,3 +181,50 @@ describe("leaderboard API configuration", () => {
     expect(await res.json()).toMatchObject({ enabled: true, error: "store_unavailable" });
   });
 });
+
+describe("leaderboard avatars", () => {
+  const avatar = "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]).toString("base64");
+  const patch = (body: Record<string, unknown>) =>
+    PATCH(new Request("http://localhost/api/leaderboard", { method: "PATCH", body: JSON.stringify(body) }));
+
+  it("shows a shared avatar, and removes it on request", async () => {
+    const t = await token();
+    vi.setSystemTime(T0 + 60_000);
+    const res = await submit({ playerId: PLAYER_A, name: "A", token: t, distance: 500, coins: 0, durationMs: 55_000, score: 500, avatar });
+    expect(res.status).toBe(200);
+    expect((await board()).entries[0].avatar).toBe(avatar);
+
+    expect(await (await patch({ playerId: PLAYER_A, avatar: null })).json()).toEqual({ ok: true, renamed: true });
+    expect((await board()).entries[0].avatar).toBeNull();
+    await patch({ playerId: PLAYER_A, avatar });
+    expect((await board()).entries[0].avatar).toBe(avatar);
+  });
+
+  it("rejects invalid avatars and ignores players not on the board", async () => {
+    const bad = await playAndSubmit(PLAYER_A, "A", 300, 0, {});
+    expect(bad.status).toBe(200);
+    expect((await patch({ playerId: PLAYER_A, avatar: "data:image/svg+xml;base64,PHN2Zz4=" })).status).toBe(400);
+    expect(await (await patch({ playerId: PLAYER_B, avatar })).json()).toEqual({ ok: true, renamed: false });
+    expect((await patch({ playerId: PLAYER_A })).status).toBe(400); // nothing to change
+  });
+
+  it("hides every avatar when LEADERBOARD_AVATARS=off", async () => {
+    await playAndSubmit(PLAYER_A, "A", 300, 0);
+    await patch({ playerId: PLAYER_A, avatar });
+    vi.stubEnv("LEADERBOARD_AVATARS", "off");
+    expect((await board()).entries[0].avatar).toBeNull();
+  });
+
+  it("lets the admin remove the avatar at a rank, and only the admin", async () => {
+    await playAndSubmit(PLAYER_A, "Top", 900, 0);
+    await patch({ playerId: PLAYER_A, avatar });
+    const del = (auth?: string) =>
+      DELETE(new Request("http://localhost/api/leaderboard?rank=1", { method: "DELETE", headers: auth ? { authorization: auth } : {} }));
+    expect((await del("Bearer x")).status).toBe(404); // no admin secret configured
+    vi.stubEnv("LEADERBOARD_ADMIN_SECRET", "s3cret");
+    expect((await del("Bearer wrong")).status).toBe(401);
+    expect(await (await del("Bearer s3cret")).json()).toEqual({ ok: true, removed: "Top" });
+    expect((await board()).entries[0].avatar).toBeNull();
+  });
+});
+

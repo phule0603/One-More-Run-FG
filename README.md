@@ -24,6 +24,26 @@ Xây dựng bằng **Next.js (App Router) + HTML5 Canvas + Tailwind CSS**, deplo
 - Mỗi lần phá kỷ lục cá nhân, điểm được gửi lên **bảng xếp hạng toàn cầu**; màn hình Game Over hiện thứ hạng (`🌐 GLOBAL RANK #12`).
 - Nút 🏆 mở bảng xếp hạng với 2 tab: **GLOBAL** (top 10 toàn cầu + hạng của bạn) và **THIS DEVICE** (top 10 trên máy này).
 - Mỗi người chơi có một ID ngẫu nhiên lưu trên thiết bị; bảng toàn cầu chỉ giữ điểm cao nhất của mỗi người. Đổi tên thì tên trên bảng cũng đổi theo.
+- **Ảnh đại diện trên bảng xếp hạng:** người chơi có ảnh có thể tick *Show my photo on the global leaderboard* (mặc định **tắt**). Khi bật, chỉ một ảnh thu nhỏ 48×48 (~2 KB) được gửi lên; tắt đi là ảnh bị gỡ khỏi bảng. Tab THIS DEVICE luôn hiện ảnh của bạn (không gửi đi đâu).
+
+### Quà (power-up)
+
+Trên đường chạy thỉnh thoảng xuất hiện hộp quà lục giác **màu xanh lá** (xanh = có lợi; chướng ngại vật đều màu nóng/tím). Chạy xuyên qua là nhặt được:
+
+| Quà | Tác dụng | Thời gian |
+| --- | --- | --- |
+| 🧲 **MAGNET** | Hút vàng trong bán kính lớn về phía nhân vật | 8 s |
+| 👻 **GHOST** | Đi xuyên mọi vật cản (nhấp nháy 1 s cuối để báo sắp hết) | 4 s |
+| ♥ **+1 LIFE** | Đỡ một lần va chạm: bật lên và bất tử 1,5 s (vòng vàng quanh người) | đến khi dùng |
+| ⏳ **SLOW-MO** | Thế giới chậm lại còn 65% | 5 s |
+| 🪶 **TRIPLE JUMP** | Thêm một lần nhảy trên không (có cánh) | 10 s |
+
+Cân bằng game:
+
+- Quà nằm **giữa khoảng trống** giữa hai cụm chướng ngại vật, ở **độ cao chạy**: không bao giờ phải nhảy mạo hiểm để nhặt, và không tạo thêm nguy hiểm. Quà đầu tiên sau ~8 giây, sau đó khoảng 14–22 giây một quà.
+- Chỉ giữ được **tối đa 1 mạng** (không cộng dồn); GHOST không bao giờ kết thúc khi nhân vật đang nằm trong vật cản.
+- SLOW-MO không làm các cụm chướng ngại vật sinh ra trong lúc chậm bị dồn sát nhau khi hết hiệu lực.
+- Quà **không cộng điểm trực tiếp** và không đổi công thức tính điểm, nên cơ chế chống gian lận của bảng xếp hạng vẫn đúng.
 
 ### Nhân vật
 
@@ -37,7 +57,7 @@ Nhân vật là một người chạy neon (dáng chibi) với khăn đỏ bay p
 ### Ảnh làm khuôn mặt nhân vật
 
 - Bấm vào ô nhân vật (hoặc nút **📷 PHOTO**) để chọn ảnh: ảnh được cắt vuông ở giữa, thu nhỏ còn 128×128 và trở thành **khuôn mặt** của nhân vật (đầu tròn viền neon); hạt bụi và mảnh nổ lấy màu từ chính bức ảnh.
-- Ảnh được xử lý **hoàn toàn trong trình duyệt** và chỉ lưu trên thiết bị (`localStorage`), không tải lên máy chủ và không hiện trên bảng xếp hạng.
+- Ảnh được xử lý **hoàn toàn trong trình duyệt** và lưu trên thiết bị (`localStorage`). Ảnh gốc không bao giờ được tải lên; chỉ khi bạn bật chia sẻ thì một ảnh thu nhỏ 48×48 mới được gửi để hiện trên bảng xếp hạng.
 - Nút **↺ DEFAULT** trở về khuôn mặt mặc định (mặt nạ neon).
 
 ## Chạy local
@@ -75,6 +95,17 @@ Muốn dùng Redis thật khi chạy local: `npx vercel env pull .env.local` r�
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Có (để bật bảng toàn cầu) | Do tích hợp Upstash của Vercel tự thêm. Cũng nhận tên `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` |
 | `LEADERBOARD_SECRET` | Không | Khoá ký run token; mặc định suy ra từ token Redis |
 | `LEADERBOARD_STORE=memory` | Không | Dùng bộ nhớ tạm cả ở production (chỉ để thử nghiệm) |
+| `LEADERBOARD_AVATARS=off` | Không | Công tắc khẩn cấp: ẩn và không nhận ảnh đại diện trên bảng toàn cầu |
+| `LEADERBOARD_ADMIN_SECRET` | Không | Bật lệnh gỡ ảnh đại diện vi phạm (xem bên dưới) |
+
+**Gỡ một ảnh đại diện không phù hợp** (cần đặt `LEADERBOARD_ADMIN_SECRET`): gỡ ảnh của người đứng hạng 3:
+
+```bash
+curl -X DELETE "https://<tên-project>.vercel.app/api/leaderboard?rank=3" \
+  -H "Authorization: Bearer <LEADERBOARD_ADMIN_SECRET>"
+```
+
+Máy chủ chỉ nhận ảnh JPEG nhỏ (≤ 8 KB, kiểm tra định dạng) nên không thể chèn SVG/HTML.
 
 **Chống gian lận:** game chạy trên trình duyệt nên không thể chặn tuyệt đối, nhưng server kiểm tra:
 
@@ -135,12 +166,13 @@ hooks/
   useAvatar.ts                    # tải / lưu / xoá ảnh nhân vật
 lib/
   game-config.ts                  # hằng số dùng chung cho game và server (tốc độ, cách tính điểm)
+  powerups.ts                     # quà: thời lượng, tỉ lệ xuất hiện, biểu tượng
   character.ts                    # nhân vật hình người: tư thế chạy / nhảy / lộn vòng / tiếp đất và cách vẽ
   avatar.ts                       # cắt, thu nhỏ ảnh và lấy bảng màu (chạy trong trình duyệt)
   leaderboard/shared.ts           # kiểu dữ liệu, lọc tên, kiểm tra tính hợp lý của điểm
   leaderboard/token.ts            # ký / xác thực run token (HMAC)
   leaderboard/store.ts            # lưu trữ: Redis (Upstash REST) hoặc bộ nhớ tạm
-tests/                            # unit test (Vitest) + giả lập Upstash
+tests/                            # unit test (Vitest): luật điểm, token, store, API, nhân vật, cơ chế quà + giả lập Upstash
 .github/workflows/ci-deploy.yml   # CI/CD
 vercel.json
 ```
@@ -164,5 +196,6 @@ vercel.json
 | `GRAVITY`, `JUMP_V`, `DJUMP_V` | `hooks/useOneMoreRun.ts` | Trọng lực, lực nhảy, lực nhảy đôi |
 | `COYOTE`, `BUFFER` | `hooks/useOneMoreRun.ts` | Độ "dễ tính" của nút nhảy |
 | `RETRY_LOCK` | `hooks/useOneMoreRun.ts` | Thời gian khoá input sau khi chết |
+| `POWERS`, `GIFT_EVERY`, `MAGNET_RADIUS`, `SLOW_FACTOR`, `MAX_LIVES` | `lib/powerups.ts` | Thời lượng và tỉ lệ từng loại quà, tần suất quà, bán kính nam châm, mức chậm, số mạng tối đa |
 
 Các hằng số trong `lib/game-config.ts` cũng được server dùng để kiểm tra điểm, nên bảng xếp hạng luôn khớp với luật chơi. Tỉ lệ xuất hiện từng loại chướng ngại vật nằm trong `spawnPattern()`.

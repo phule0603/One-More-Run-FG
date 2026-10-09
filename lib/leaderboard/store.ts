@@ -13,6 +13,8 @@ export interface StoredEntry {
   distance: number;
   coins: number;
   at: number;
+  /** shared thumbnail, if any (only filled in by `top`) */
+  avatar?: string | null;
 }
 
 export interface SubmitResult {
@@ -29,6 +31,8 @@ export interface LeaderboardStore {
   submit(entry: StoredEntry): Promise<SubmitResult>;
   /** Renames a player that is already on the board. */
   rename(playerId: string, name: string): Promise<boolean>;
+  /** Sets (or with null removes) the shared thumbnail of a player. */
+  setAvatar(playerId: string, avatar: string | null): Promise<void>;
   /** Burns a run-token nonce; false if it was already used. */
   claimNonce(nonce: string, ttlSec: number): Promise<boolean>;
   /** Fixed-window rate limit: true while under `limit` hits in the current window. */
@@ -40,6 +44,7 @@ export interface LeaderboardStore {
 export class MemoryStore implements LeaderboardStore {
   readonly kind = "memory";
   private players = new Map<string, StoredEntry>();
+  private avatars = new Map<string, string>();
   private nonces = new Map<string, number>();
   private hits = new Map<string, number>();
 
@@ -52,7 +57,7 @@ export class MemoryStore implements LeaderboardStore {
   async top(limit: number) {
     return this.ranked()
       .slice(0, limit)
-      .map((e) => ({ ...e }));
+      .map((e) => ({ ...e, avatar: this.avatars.get(e.playerId) ?? null }));
   }
 
   async rankOf(playerId: string) {
@@ -75,6 +80,11 @@ export class MemoryStore implements LeaderboardStore {
     if (!p) return false;
     p.name = name;
     return true;
+  }
+
+  async setAvatar(playerId: string, avatar: string | null) {
+    if (avatar) this.avatars.set(playerId, avatar);
+    else this.avatars.delete(playerId);
   }
 
   async claimNonce(nonce: string, ttlSec: number) {
@@ -159,15 +169,17 @@ export class RedisRestStore implements LeaderboardStore {
       scores.push(Number(flat[i + 1]));
     }
     if (ids.length === 0) return [];
-    const [names, runs] = (await this.pipeline([
+    const [names, runs, avatars] = (await this.pipeline([
       ["HMGET", this.key("names"), ...ids],
       ["HMGET", this.key("runs"), ...ids],
-    ])) as [(string | null)[], (string | null)[]];
+      ["HMGET", this.key("avatars"), ...ids],
+    ])) as [(string | null)[], (string | null)[], (string | null)[]];
     return ids.map((playerId, i) => ({
       playerId,
       name: names[i] ?? "???",
       score: scores[i],
       ...parseRun(runs[i]),
+      avatar: avatars[i] ?? null,
     }));
   }
 
@@ -201,6 +213,12 @@ export class RedisRestStore implements LeaderboardStore {
     if (score === null) return false;
     await this.pipeline([["HSET", this.key("names"), playerId, name]]);
     return true;
+  }
+
+  async setAvatar(playerId: string, avatar: string | null) {
+    await this.pipeline([
+      avatar ? ["HSET", this.key("avatars"), playerId, avatar] : ["HDEL", this.key("avatars"), playerId],
+    ]);
   }
 
   async claimNonce(nonce: string, ttlSec: number) {
