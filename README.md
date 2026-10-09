@@ -8,7 +8,7 @@ Xây dựng bằng **Next.js (App Router) + HTML5 Canvas + Tailwind CSS**, deplo
 | Thao tác | Desktop | Mobile |
 | --- | --- | --- |
 | Nhảy | `Space` / `↑` / `W` / click chuột | Chạm màn hình |
-| Nhảy đôi (double jump) | Nhấn lần nữa khi đang ở trên không | Chạm lần nữa |
+| Nhảy đôi (double jump) — nhân vật lộn vòng | Nhấn lần nữa khi đang ở trên không | Chạm lần nữa |
 | Chơi lại | `Space` / click | Chạm |
 | Bật/tắt âm thanh | `M` hoặc nút 🔊 | Nút 🔊 |
 | Bảng xếp hạng | Nút 🏆 | Nút 🏆 |
@@ -25,11 +25,20 @@ Xây dựng bằng **Next.js (App Router) + HTML5 Canvas + Tailwind CSS**, deplo
 - Nút 🏆 mở bảng xếp hạng với 2 tab: **GLOBAL** (top 10 toàn cầu + hạng của bạn) và **THIS DEVICE** (top 10 trên máy này).
 - Mỗi người chơi có một ID ngẫu nhiên lưu trên thiết bị; bảng toàn cầu chỉ giữ điểm cao nhất của mỗi người. Đổi tên thì tên trên bảng cũng đổi theo.
 
-### Nhân vật từ ảnh
+### Nhân vật
 
-- Bấm vào ô nhân vật (hoặc nút **📷 PHOTO**) để chọn ảnh: ảnh được cắt vuông ở giữa, thu nhỏ còn 128×128 và trở thành nhân vật — xoay khi nhảy, có viền neon, vệt mờ và hạt nổ lấy màu từ chính bức ảnh.
+Nhân vật là một người chạy neon (dáng chibi) với khăn đỏ bay phía sau:
+
+- **Chạy:** tay chân đánh nhịp theo sải chân, nhịp chạy nhanh dần theo tốc độ.
+- **Bật nhảy:** vung tay lên, co gối khi bay lên, duỗi chân đón đất khi rơi; tiếp đất thì khuỵu gối.
+- **Nhảy đôi:** lộn một vòng (somersault) trong tư thế ôm gối, để lại vệt bóng mờ của khuôn mặt.
+- Hitbox (vùng va chạm) giữ nguyên như trước, nên độ khó không đổi.
+
+### Ảnh làm khuôn mặt nhân vật
+
+- Bấm vào ô nhân vật (hoặc nút **📷 PHOTO**) để chọn ảnh: ảnh được cắt vuông ở giữa, thu nhỏ còn 128×128 và trở thành **khuôn mặt** của nhân vật (đầu tròn viền neon); hạt bụi và mảnh nổ lấy màu từ chính bức ảnh.
 - Ảnh được xử lý **hoàn toàn trong trình duyệt** và chỉ lưu trên thiết bị (`localStorage`), không tải lên máy chủ và không hiện trên bảng xếp hạng.
-- Nút **↺ CUBE** trở về khối neon mặc định.
+- Nút **↺ DEFAULT** trở về khuôn mặt mặc định (mặt nạ neon).
 
 ## Chạy local
 
@@ -126,6 +135,7 @@ hooks/
   useAvatar.ts                    # tải / lưu / xoá ảnh nhân vật
 lib/
   game-config.ts                  # hằng số dùng chung cho game và server (tốc độ, cách tính điểm)
+  character.ts                    # nhân vật hình người: tư thế chạy / nhảy / lộn vòng / tiếp đất và cách vẽ
   avatar.ts                       # cắt, thu nhỏ ảnh và lấy bảng màu (chạy trong trình duyệt)
   leaderboard/shared.ts           # kiểu dữ liệu, lọc tên, kiểm tra tính hợp lý của điểm
   leaderboard/token.ts            # ký / xác thực run token (HMAC)
@@ -141,6 +151,7 @@ vercel.json
 - **Input không độ trễ:** cú nhảy xử lý ngay trong event handler, kèm *jump buffer* (130 ms) và *coyote time* (90 ms).
 - **Restart tức thì:** chỉ reset state trong bộ nhớ, không reload trang (~30 ms). Khoá 0,3 s sau khi chết để tránh bấm nhầm. Gửi điểm chạy nền, không làm chậm lượt chơi mới.
 - **Responsive:** canvas co giãn theo màn hình, hỗ trợ Retina. Màn hình hẹp hiển thị ít đường chạy hơn nên tốc độ được giảm tương ứng để thời gian phản xạ như nhau; điểm số được chuẩn hoá nên vẫn so sánh được giữa các thiết bị.
+- **Nhân vật:** khung xương 2D (đùi, cẳng chân, cánh tay, đầu) với các tư thế được nội suy: sải chạy, bật nhảy, lộn vòng, khuỵu gối; khi ở dưới đất, thân được hạ xuống để bàn chân luôn chạm mặt đường.
 - **Game feel:** screen shake, flash, particle, sóng xung kích, vệt mờ, squash & stretch, âm thanh tổng hợp bằng WebAudio (không cần file asset).
 - **React chỉ render overlay** khi đổi trạng thái; HUD trong lúc chơi vẽ thẳng lên canvas.
 

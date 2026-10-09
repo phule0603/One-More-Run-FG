@@ -19,12 +19,12 @@ const blurAfter = (fn: () => void) => (e: MouseEvent<HTMLButtonElement>) => {
   e.currentTarget.blur();
 };
 
-export function DefaultCube() {
+/** The default head: the same glowing visor the runner wears in game. */
+export function DefaultHead() {
   return (
-    <span className="grid h-full w-full place-items-center bg-[#083344]">
-      <span className="grid h-[42%] w-[42%] place-items-center bg-neon-cyan">
-        <span className="h-[40%] w-[40%] bg-cyan-50" />
-      </span>
+    <span className="relative block h-full w-full bg-[#083344]">
+      <span className="absolute left-[46%] top-[32%] h-[27%] w-[44%] rounded-full bg-neon-cyan shadow-[0_0_10px_rgba(34,211,238,0.9)]" />
+      <span className="absolute left-[56%] top-[41%] h-[6%] w-[22%] bg-cyan-50" />
     </span>
   );
 }
@@ -103,12 +103,12 @@ export default function PlayerCard({
         type="button"
         onClick={blurAfter(pickPhoto)}
         aria-label="Upload a photo as your character"
-        className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border-2 border-neon-cyan shadow-[0_0_16px_rgba(34,211,238,0.55)] transition hover:scale-105"
+        className="relative h-16 w-16 shrink-0 overflow-hidden rounded-full border-2 border-neon-cyan shadow-[0_0_16px_rgba(34,211,238,0.55)] transition hover:scale-105"
       >
         {avatarUrl ? (
           <img src={avatarUrl} alt="Your character" className="h-full w-full object-cover" />
         ) : (
-          <DefaultCube />
+          <DefaultHead />
         )}
         {avatarBusy && (
           <span className="absolute inset-0 grid place-items-center bg-black/60 text-xs text-cyan-100">…</span>
@@ -132,7 +132,7 @@ export default function PlayerCard({
               onClick={blurAfter(onResetAvatar)}
               className="rounded-md border border-white/25 px-2 py-1 text-white/70 transition hover:bg-white/10"
             >
-              ↺ CUBE
+              ↺ DEFAULT
             </button>
           )}
         </div>

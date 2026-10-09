@@ -1,6 +1,17 @@
 "use client";
 
 import { RefObject, useCallback, useEffect, useRef, useState } from "react";
+import {
+  airPose,
+  BODY,
+  CROUCH,
+  drawFigure,
+  drawHead,
+  figureJoints,
+  lerpPose,
+  runPose,
+  TUCK,
+} from "@/lib/character";
 import { BASE_SPEED, COIN_VALUE, MAX_SPEED, METERS_PER_UNIT, RAMP_TIME } from "@/lib/game-config";
 
 /* =============================================================================
@@ -52,9 +63,15 @@ interface Player {
   coyote: number;
   buffer: number;
   airJumps: number;
+  /** body rotation, used by the double-jump somersault */
   rot: number;
+  flipT: number; // seconds into the current flip, -1 when not flipping
+  flipFrom: number;
+  flipTo: number;
+  runPhase: number;
   squash: number;
-  trail: { x: number; y: number; rot: number }[];
+  /** recent head positions (world space), drawn as ghosts during a flip */
+  trail: { x: number; y: number }[];
 }
 
 type Obstacle =
@@ -150,7 +167,10 @@ const COYOTE = 0.09;
 const BUFFER = 0.13;
 const SIZE = 34;
 const HIT_INSET = 4;
-const SPIN_SPEED = 8;
+const STRIDE_LEN = 125; // world units per running stride
+const MAX_STRIDE_HZ = 5.5;
+const FLIP_TIME = 0.46; // seconds for the double-jump somersault
+const C_SCARF = "#ff4d6d";
 
 const REF_LOOKAHEAD = 772; // visible track ahead of the player on a 16:9 screen
 const MIN_SPEED_FACTOR = 0.75;
@@ -235,16 +255,6 @@ function polysIntersect(a: Vec[], b: Vec[]) {
     }
   }
   return true;
-}
-
-function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
 }
 
 /* =============================================================================
@@ -490,6 +500,10 @@ class Engine {
       buffer: 0,
       airJumps: 1,
       rot: 0,
+      flipT: -1,
+      flipFrom: 0,
+      flipTo: 0,
+      runPhase: 0,
       squash: 0,
       trail: [],
     };
@@ -587,6 +601,10 @@ class Engine {
       p.airJumps -= 1;
       p.buffer = 0;
       p.squash = -0.5;
+      // somersault: one full forward turn (chained onto a flip still in progress)
+      p.flipFrom = p.rot;
+      p.flipTo = (p.flipT >= 0 ? p.flipTo : 0) + Math.PI * 2;
+      p.flipT = 0;
       const cx = p.x + SIZE / 2;
       this.rings.push({ x: cx, y: p.y, r: 6, grow: 260, life: 0.3, max: 0.3, color: C_PLAYER });
       this.burst(cx, p.y, 14, [this.playerColors[0], "#f0abfc"], 80, 300, 0.4, false, true, -0.9);
@@ -601,6 +619,7 @@ class Engine {
     else if (this.phase === "ready") {
       this.scroll += BASE_SPEED * 0.55 * dt;
       this.player.trail.length = 0;
+      this.player.runPhase += ((BASE_SPEED * 0.55) / STRIDE_LEN) * dt * Math.PI * 2;
     } else {
       this.deadTime += dt;
     }
@@ -683,17 +702,25 @@ class Engine {
 
     if (p.buffer > 0 && (p.grounded || p.coyote > 0)) this.tryJump();
 
+    if (p.flipT >= 0) {
+      // a flip cut short by landing finishes as a quick roll
+      p.flipT += p.grounded ? dt * 4 : dt;
+      const k = Math.min(1, p.flipT / FLIP_TIME);
+      const eased = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      p.rot = p.flipFrom + (p.flipTo - p.flipFrom) * eased;
+      if (k >= 1) {
+        p.rot = 0;
+        p.flipT = -1;
+      }
+    }
     if (p.grounded) {
-      const target = Math.round(p.rot / (Math.PI / 2)) * (Math.PI / 2);
-      p.rot += (target - p.rot) * Math.min(1, dt * 25);
+      p.runPhase += Math.min(this.speed / STRIDE_LEN, MAX_STRIDE_HZ) * dt * Math.PI * 2;
       if (Math.random() < dt * 30) {
         this.particles.push({
-          x: p.x + 2, y: p.y + 1, vx: -rand(40, 120), vy: rand(20, 90), life: 0.3, max: 0.3,
+          x: p.x + SIZE / 2 - 4, y: p.y + 1, vx: -rand(40, 120), vy: rand(20, 90), life: 0.3, max: 0.3,
           size: rand(1.5, 3), color: this.playerColors[0], drag: 2, gravity: 300, square: true, scroll: true,
         });
       }
-    } else {
-      p.rot += SPIN_SPEED * dt;
     }
 
     // collisions
@@ -1262,67 +1289,79 @@ class Engine {
   private drawPlayer(ctx: CanvasRenderingContext2D) {
     const p = this.player;
     const half = SIZE / 2;
-
-    if (this.phase === "playing") {
-      p.trail.push({ x: p.x + half, y: p.y + half, rot: p.rot });
-      if (p.trail.length > 7) p.trail.shift();
-    }
     const avatar = this.avatar;
+    const grounded = p.grounded || this.phase === "ready";
+    const flipping = p.flipT >= 0;
+
+    // pose: stride on the ground, jump arc in the air, tucked while flipping, crouch on landing
+    let pose = grounded ? runPose(p.runPhase) : airPose(p.vy / JUMP_V);
+    if (flipping) {
+      const k = Math.min(1, p.flipT / FLIP_TIME);
+      pose = lerpPose(pose, TUCK, Math.min(1, k / 0.2, (1 - k) / 0.2));
+    }
+    if (p.squash > 0) pose = lerpPose(pose, CROUCH, Math.min(1, p.squash / 0.8) * 0.85);
+    const j = figureJoints(pose, grounded && !flipping);
+
+    // body transform: box centre, somersault around the figure's middle, squash from the feet
+    const cx = p.x + half;
+    const cy = this.sy(p.y) - half;
+    const pivotY = -4;
+    // light squash only: the crouch pose carries the landing, and faces shouldn't warp
+    const sq = flipping ? 0 : p.squash;
+    const sx = 1 + sq * 0.06;
+    const syScale = 1 - sq * 0.06;
+    const cosR = Math.cos(p.rot);
+    const sinR = Math.sin(p.rot);
+    const toScreen = (x: number, y: number) => {
+      const lx = x * sx;
+      const ly = BODY.groundY + (y - BODY.groundY) * syScale - pivotY;
+      return { x: cx + lx * cosR - ly * sinR, y: cy + pivotY + lx * sinR + ly * cosR };
+    };
+    const head = toScreen(j.head.x, j.head.y);
+    const neck = toScreen(j.neck.x, j.neck.y);
+
+    // ghost heads streaming behind a somersault
+    if (this.phase === "playing") {
+      p.trail.push({ x: head.x, y: this.groundY - head.y });
+      if (p.trail.length > 6) p.trail.shift();
+    }
+    if (flipping) {
+      p.trail.forEach((t, i) => {
+        const a = (i + 1) / (p.trail.length + 1);
+        ctx.save();
+        ctx.globalAlpha = a * 0.25;
+        ctx.translate(t.x, this.sy(t.y));
+        drawHead(ctx, avatar, C_PLAYER, BODY.headR * (0.6 + a * 0.4));
+        ctx.restore();
+      });
+    }
+
+    // scarf: drawn in world space so it always streams behind, even upside down
+    const droop = grounded ? 0.45 : 0.45 + p.vy * 0.0022;
+    const flutter = this.time * (10 + this.speed / 90);
     ctx.save();
-    if (!avatar) ctx.globalCompositeOperation = "lighter";
-    p.trail.forEach((t, i) => {
-      const a = (i + 1) / (p.trail.length + 1);
-      const s = SIZE * (0.4 + a * 0.5);
-      ctx.save();
-      ctx.translate(t.x, this.sy(t.y));
-      ctx.rotate(t.rot);
-      if (avatar) {
-        ctx.globalAlpha = a * 0.3;
-        ctx.drawImage(avatar, -s / 2, -s / 2, s, s);
-      } else {
-        ctx.fillStyle = `rgba(34,211,238,${a * 0.22})`;
-        ctx.fillRect(-s / 2, -s / 2, s, s);
-      }
-      ctx.restore();
-    });
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = C_SCARF;
+    ctx.shadowColor = C_SCARF;
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = 3.4;
+    ctx.beginPath();
+    ctx.moveTo(neck.x, neck.y);
+    for (let i = 1; i <= 7; i++) {
+      ctx.lineTo(neck.x - i * 4.3, neck.y + i * droop + Math.sin(flutter - i * 0.9) * (0.3 + i * 0.35));
+    }
+    ctx.stroke();
     ctx.restore();
 
-    const idleBob = this.phase === "ready" ? Math.abs(Math.sin(this.time * 9)) * 3 : 0;
-    const sq = p.squash;
-    const sx = 1 + sq * 0.25;
-    const sy = 1 - sq * 0.25;
-
     ctx.save();
-    ctx.translate(p.x + half, this.sy(p.y + idleBob) - half * sy);
+    ctx.translate(cx, cy + pivotY);
     ctx.rotate(p.rot);
-    ctx.scale(sx, sy);
-    ctx.shadowColor = C_PLAYER;
-    ctx.shadowBlur = 22;
-    ctx.fillStyle = "#083344";
-    if (avatar) {
-      // photo character: glow, then the image clipped to a rounded tile, then a neon rim
-      roundRectPath(ctx, -half, -half, SIZE, SIZE, 7);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.save();
-      ctx.clip();
-      ctx.drawImage(avatar, -half, -half, SIZE, SIZE);
-      ctx.restore();
-      ctx.strokeStyle = C_PLAYER;
-      ctx.lineWidth = 2.5;
-      roundRectPath(ctx, -half + 1.25, -half + 1.25, SIZE - 2.5, SIZE - 2.5, 6);
-      ctx.stroke();
-    } else {
-      ctx.fillRect(-half, -half, SIZE, SIZE);
-      ctx.strokeStyle = C_PLAYER;
-      ctx.lineWidth = 3;
-      ctx.strokeRect(-half + 1.5, -half + 1.5, SIZE - 3, SIZE - 3);
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = C_PLAYER;
-      ctx.fillRect(-7, -7, 14, 14);
-      ctx.fillStyle = "#ecfeff";
-      ctx.fillRect(-3, -3, 6, 6);
-    }
+    ctx.translate(0, -pivotY);
+    ctx.translate(0, BODY.groundY);
+    ctx.scale(sx, syScale);
+    ctx.translate(0, -BODY.groundY);
+    drawFigure(ctx, j, avatar, C_PLAYER);
     ctx.restore();
 
     if (!p.grounded && p.airJumps > 0 && this.phase === "playing") {
